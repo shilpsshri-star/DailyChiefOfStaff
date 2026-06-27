@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useUser } from "@clerk/nextjs";
 import Link from "next/link";
-import { DailyLog, DailyResultStatus, EMPTY_DAILY_LOG } from "@/lib/types";
+import { DailyLog, DailyResultStatus, EMPTY_DAILY_LOG, Profile, EMPTY_PROFILE } from "@/lib/types";
 import AuthGate from "@/components/AuthGate";
 
 function todayKeyClient(): string {
@@ -30,8 +30,20 @@ export default function DailyPage() {
 
 type Answer = { status: DailyResultStatus; note: string };
 
+function ActivateGoalCallout({ message }: { message: string }) {
+  return (
+    <div className="card p-6 text-center">
+      <p className="text-ink/70">{message}</p>
+      <Link href="/goals" className="btn-primary mt-4 inline-block">
+        Activate a Goal
+      </Link>
+    </div>
+  );
+}
+
 function DailyContent() {
   const [log, setLog] = useState<DailyLog>(EMPTY_DAILY_LOG(todayKeyClient()));
+  const [profile, setProfile] = useState<Profile>(EMPTY_PROFILE);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -39,9 +51,14 @@ function DailyContent() {
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
 
   async function load() {
-    const res = await fetch("/api/daily/morning");
-    const data: DailyLog = await res.json();
+    const [logRes, profileRes] = await Promise.all([
+      fetch("/api/daily/morning"),
+      fetch("/api/goals"),
+    ]);
+    const data: DailyLog = await logRes.json();
+    const profileData: Profile = await profileRes.json();
     setLog(data);
+    setProfile(profileData);
     const seeded: Record<string, Answer> = {};
     for (const item of data.focusItems) {
       const existing = data.results.find((r) => r.stepId === item.stepId);
@@ -109,6 +126,8 @@ function DailyContent() {
 
   if (loading) return <p className="text-ink/60">Loading…</p>;
 
+  const hasActiveGoal = profile.goals.some((g) => g.status === "active");
+
   return (
     <div className="space-y-6">
       <div>
@@ -120,7 +139,11 @@ function DailyContent() {
         <div className="card border-red-200 p-4 text-sm text-red-600">{error}</div>
       )}
 
-      {!log.morningGeneratedAt && (
+      {!log.morningGeneratedAt && !hasActiveGoal && (
+        <ActivateGoalCallout message="You haven't activated a goal yet — there's nothing to focus on until you do. Break a goal into milestones and steps first." />
+      )}
+
+      {!log.morningGeneratedAt && hasActiveGoal && (
         <div className="card p-6 text-center">
           <p className="text-ink/70">
             Get your 3 focus items for today, picked from your active goals.
@@ -136,13 +159,7 @@ function DailyContent() {
       )}
 
       {log.morningGeneratedAt && log.focusItems.length === 0 && (
-        <div className="card p-6 text-center text-ink/60">
-          No active steps to focus on yet.{" "}
-          <Link href="/goals" className="text-accent hover:underline">
-            Activate a goal
-          </Link>{" "}
-          to get started.
-        </div>
+        <ActivateGoalCallout message="No active steps to focus on yet — activate a goal to get started." />
       )}
 
       {log.focusItems.length > 0 && !log.eveningCompletedAt && (

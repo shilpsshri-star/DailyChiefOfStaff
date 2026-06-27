@@ -12,6 +12,7 @@ import {
 } from "@/lib/localDraft";
 
 const MAX_GOALS = 5;
+const AUTOSAVE_DELAY_MS = 700;
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -22,6 +23,7 @@ export default function OnboardingPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const wasSignedIn = useRef(false);
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load the right source of truth: server profile if signed in, otherwise
   // whatever's been drafted locally during the free trial.
@@ -57,13 +59,47 @@ export default function OnboardingPage() {
     load();
   }, [isLoaded, isSignedIn]);
 
-  // Auto-save to localStorage for guests, so the trial never loses work.
+  // Guests: auto-save to localStorage so the trial never loses work.
   useEffect(() => {
     if (loading || isSignedIn) return;
     saveDraftGoals(goals);
   }, [goals, loading, isSignedIn]);
 
+  // Signed-in users: auto-save to Vercel KV (debounced) so goals persist
+  // even if the user never clicks the explicit "Save goals" button and
+  // instead navigates straight to Goals/Daily Loop via the nav bar.
+  useEffect(() => {
+    if (loading || !isSignedIn) return;
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(() => {
+      persistGoals(goals).then((ok) => {
+        if (ok) setSaved(true);
+      });
+    }, AUTOSAVE_DELAY_MS);
+    return () => {
+      if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goals, loading, isSignedIn]);
+
+  async function persistGoals(current: string[]): Promise<boolean> {
+    try {
+      const res = await fetch("/api/goals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goals: current }),
+      });
+      if (!res.ok) return false;
+      const profile: Profile = await res.json();
+      setGoals(profile.goals.length ? profile.goals.map((g) => g.text) : [""]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function updateGoal(index: number, value: string) {
+    setSaved(false);
     setGoals((prev) => prev.map((g, i) => (i === index ? value : g)));
   }
 
@@ -72,6 +108,7 @@ export default function OnboardingPage() {
   }
 
   function removeGoal(index: number) {
+    setSaved(false);
     setGoals((prev) => {
       const next = prev.filter((_, i) => i !== index);
       return next.length ? next : [""];
@@ -80,20 +117,25 @@ export default function OnboardingPage() {
 
   async function save() {
     if (!isSignedIn) return; // guests are auto-saved locally; button is a sign-in CTA for them
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     setSaving(true);
     setSaved(false);
     try {
-      const res = await fetch("/api/goals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goals }),
-      });
-      const profile: Profile = await res.json();
-      setGoals(profile.goals.length ? profile.goals.map((g) => g.text) : [""]);
-      setSaved(true);
+      const ok = await persistGoals(goals);
+      setSaved(ok);
     } finally {
       setSaving(false);
     }
+  }
+
+  async function goActivate() {
+    // Make sure whatever's currently typed is persisted before leaving the
+    // page — don't rely solely on the debounced autosave having fired yet.
+    if (isSignedIn) {
+      if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+      await persistGoals(goals);
+    }
+    router.push("/goals");
   }
 
   if (!isLoaded || loading) {
@@ -123,6 +165,7 @@ export default function OnboardingPage() {
         <h2 className="font-medium">Your goals</h2>
         <p className="mt-1 text-sm text-ink/60">
           Up to {MAX_GOALS}. Just write what you want, in your own words.
+          {isSignedIn && " Saved automatically as you type."}
         </p>
         <div className="mt-4 space-y-3">
           {goals.map((text, i) => (
@@ -164,7 +207,7 @@ export default function OnboardingPage() {
             {saved && <span className="text-sm text-green-600">Saved!</span>}
             <button
               className="text-sm text-accent hover:underline"
-              onClick={() => router.push("/goals")}
+              onClick={goActivate}
               type="button"
             >
               Go activate a goal →
