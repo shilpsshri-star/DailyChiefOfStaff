@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useUser } from "@clerk/nextjs";
-import { Badge, Briefing, EndOfDaySummary, UserStats } from "@/lib/types";
+import { Badge, DailyLog, UserStats } from "@/lib/types";
 import { todayKey } from "@/lib/date";
 import AuthGate from "@/components/AuthGate";
 
@@ -42,10 +42,7 @@ function DashboardContent() {
   const [data, setData] = useState<StatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [dayDetail, setDayDetail] = useState<{
-    briefing: Briefing | null;
-    eod: EndOfDaySummary | null;
-  } | null>(null);
+  const [dayDetail, setDayDetail] = useState<DailyLog | null>(null);
   const [dayLoading, setDayLoading] = useState(false);
 
   useEffect(() => {
@@ -62,7 +59,7 @@ function DashboardContent() {
     try {
       const res = await fetch(`/api/day/${date}`);
       const json = await res.json();
-      setDayDetail({ briefing: json.briefing ?? null, eod: json.eod ?? null });
+      setDayDetail(json.log ?? null);
     } finally {
       setDayLoading(false);
     }
@@ -82,8 +79,9 @@ function DashboardContent() {
   const lockedBadges = [
     { id: "first_day", label: "First Day", description: "Showed up for the first time.", emoji: "🌱" },
     { id: "seven_day_streak", label: "7-Day Streak", description: "Showed up 7 days in a row.", emoji: "🔥" },
-    { id: "ten_tasks_done", label: "10 Tasks Done", description: "Completed 10 tasks total.", emoji: "✅" },
-    { id: "first_goal_completed", label: "Goal Getter", description: "Marked your first goal as achieved.", emoji: "🏆" },
+    { id: "ten_steps_done", label: "10 Steps Done", description: "Completed 10 steps total.", emoji: "✅" },
+    { id: "first_milestone", label: "First Milestone", description: "Completed your first milestone.", emoji: "🚩" },
+    { id: "first_goal_completed", label: "Goal Getter", description: "Completed your first goal.", emoji: "🏆" },
     { id: "thirty_day_streak", label: "30-Day Streak", description: "Showed up 30 days in a row.", emoji: "💎" },
   ].filter((b) => !allBadgeIds.has(b.id));
 
@@ -107,22 +105,30 @@ function DashboardContent() {
         </div>
         <div className="card p-4 text-center">
           <p className="text-2xl font-semibold">{todayCompleted}</p>
-          <p className="mt-1 text-xs text-ink/60">Tasks done today</p>
+          <p className="mt-1 text-xs text-ink/60">Steps done today</p>
         </div>
         <div className="card p-4 text-center">
-          <p className="text-2xl font-semibold">{stats.totalTasksCompleted}</p>
-          <p className="mt-1 text-xs text-ink/60">Tasks done all-time</p>
+          <p className="text-2xl font-semibold">{stats.totalStepsCompleted}</p>
+          <p className="mt-1 text-xs text-ink/60">Steps done all-time</p>
         </div>
       </section>
 
-      <section className="grid grid-cols-2 gap-4">
+      <section className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="card p-4 text-center">
           <p className="text-xl font-semibold">{weekCompleted}</p>
-          <p className="mt-1 text-xs text-ink/60">Tasks done — last 7 days</p>
+          <p className="mt-1 text-xs text-ink/60">Steps done — last 7 days</p>
         </div>
         <div className="card p-4 text-center">
           <p className="text-xl font-semibold">{monthCompleted}</p>
-          <p className="mt-1 text-xs text-ink/60">Tasks done — last 30 days</p>
+          <p className="mt-1 text-xs text-ink/60">Steps done — last 30 days</p>
+        </div>
+        <div className="card p-4 text-center">
+          <p className="text-xl font-semibold">{stats.totalMilestonesCompleted}</p>
+          <p className="mt-1 text-xs text-ink/60">Milestones completed</p>
+        </div>
+        <div className="card p-4 text-center">
+          <p className="text-xl font-semibold">{stats.totalGoalsCompleted}</p>
+          <p className="mt-1 text-xs text-ink/60">Goals completed</p>
         </div>
       </section>
 
@@ -192,40 +198,46 @@ function DashboardContent() {
             </p>
             {dayLoading ? (
               <p className="mt-2 text-sm text-ink/60">Loading…</p>
-            ) : !dayDetail || (!dayDetail.briefing && !dayDetail.eod) ? (
+            ) : !dayDetail || dayDetail.focusItems.length === 0 ? (
               <p className="mt-2 text-sm text-ink/50">
                 Nothing recorded for this day.
               </p>
             ) : (
-              <div className="mt-3 space-y-4">
-                {dayDetail.briefing && (
+              <div className="mt-3 space-y-3">
+                <p className="text-sm font-medium">Focus items</p>
+                <ul className="space-y-2">
+                  {dayDetail.focusItems.map((item) => {
+                    const result = dayDetail.results.find(
+                      (r) => r.stepId === item.stepId
+                    );
+                    return (
+                      <li
+                        key={item.stepId}
+                        className="rounded-md border border-[#e8e6e1] p-3"
+                      >
+                        <p className="text-xs uppercase tracking-wide text-ink/40">
+                          {item.goalText} · {item.milestoneText}
+                        </p>
+                        <div className="mt-1 flex items-center justify-between gap-3">
+                          <span className="text-sm">{item.stepText}</span>
+                          {result && (
+                            <span className="shrink-0 rounded-full bg-[#f1efe9] px-2 py-0.5 text-xs capitalize text-ink/70">
+                              {result.status}
+                            </span>
+                          )}
+                        </div>
+                        {result?.note && (
+                          <p className="mt-1 text-sm text-ink/60">{result.note}</p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+                {dayDetail.adjustmentNote && (
                   <div>
-                    <p className="text-sm font-medium">Morning Briefing</p>
-                    {dayDetail.briefing.priorities.length === 0 ? (
-                      <p className="mt-1 whitespace-pre-wrap text-sm text-ink/70">
-                        {dayDetail.briefing.raw}
-                      </p>
-                    ) : (
-                      <ul className="mt-1 list-inside list-decimal space-y-1 text-sm text-ink/70">
-                        {dayDetail.briefing.priorities.map((p, i) => (
-                          <li key={i}>
-                            <span className="font-medium text-ink">{p.task}</span>
-                            {" — "}
-                            {p.reasoning}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-                {dayDetail.eod && (
-                  <div>
-                    <p className="text-sm font-medium">
-                      End of Day ({dayDetail.eod.completedTaskIds.length} task
-                      {dayDetail.eod.completedTaskIds.length === 1 ? "" : "s"} done)
-                    </p>
+                    <p className="text-sm font-medium">Chief of staff's note</p>
                     <p className="mt-1 whitespace-pre-wrap text-sm text-ink/70">
-                      {dayDetail.eod.summary}
+                      {dayDetail.adjustmentNote}
                     </p>
                   </div>
                 )}

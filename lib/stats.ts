@@ -1,14 +1,6 @@
 import { kvGet, kvSet, KEYS } from "./kv";
+import { dateMinusDays } from "./date";
 import { Badge, EMPTY_STATS, UserStats } from "./types";
-
-function dateMinusDays(date: string, days: number): string {
-  const d = new Date(date + "T00:00:00");
-  d.setDate(d.getDate() - days);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
 
 // Recomputes current/longest streak from the set of active dates.
 // "Streak" = consecutive calendar days, ending today or yesterday (so a
@@ -46,39 +38,49 @@ export async function getStats(userId: string): Promise<UserStats> {
 }
 
 // Call this whenever the user does something meaningful (saves a profile,
-// generates a briefing, sends a chat message, completes an end-of-day
-// check-in) so streaks stay accurate.
+// generates a morning focus, completes an evening check-in, activates a
+// milestone/goal) so streaks stay accurate.
 export async function recordActivity(
   userId: string,
   date: string,
-  opts: { tasksCompletedToday?: number; totalGoalsAchieved?: number } = {}
+  opts: {
+    stepsCompletedToday?: number;
+    totalGoalsCompleted?: number;
+    totalMilestonesCompleted?: number;
+  } = {}
 ): Promise<UserStats> {
   const stats = await getStats(userId);
 
   const activeDates = Array.from(new Set([...stats.activeDates, date])).sort();
 
   const completedByDate = { ...stats.completedByDate };
-  if (typeof opts.tasksCompletedToday === "number") {
-    completedByDate[date] = opts.tasksCompletedToday;
+  if (typeof opts.stepsCompletedToday === "number") {
+    completedByDate[date] = opts.stepsCompletedToday;
   }
 
-  const totalTasksCompleted = Object.values(completedByDate).reduce(
+  const totalStepsCompleted = Object.values(completedByDate).reduce(
     (sum, n) => sum + n,
     0
   );
 
-  const totalGoalsAchieved =
-    typeof opts.totalGoalsAchieved === "number"
-      ? opts.totalGoalsAchieved
-      : stats.totalGoalsAchieved;
+  const totalGoalsCompleted =
+    typeof opts.totalGoalsCompleted === "number"
+      ? opts.totalGoalsCompleted
+      : stats.totalGoalsCompleted;
+
+  const totalMilestonesCompleted =
+    typeof opts.totalMilestonesCompleted === "number"
+      ? opts.totalMilestonesCompleted
+      : stats.totalMilestonesCompleted;
 
   const { current, longest } = computeStreaks(activeDates, date);
 
   const updated: UserStats = {
     activeDates,
     completedByDate,
-    totalTasksCompleted,
-    totalGoalsAchieved,
+    totalStepsCompleted,
+    totalGoalsCompleted,
+    totalMilestonesCompleted,
     currentStreak: current,
     longestStreak: Math.max(longest, stats.longestStreak),
     lastActiveDate: date,
@@ -88,7 +90,13 @@ export async function recordActivity(
   return updated;
 }
 
-export const BADGES: { id: string; label: string; description: string; emoji: string; earned: (s: UserStats) => boolean }[] = [
+export const BADGES: {
+  id: string;
+  label: string;
+  description: string;
+  emoji: string;
+  earned: (s: UserStats) => boolean;
+}[] = [
   {
     id: "first_day",
     label: "First Day",
@@ -104,18 +112,25 @@ export const BADGES: { id: string; label: string; description: string; emoji: st
     earned: (s) => s.longestStreak >= 7,
   },
   {
-    id: "ten_tasks_done",
-    label: "10 Tasks Done",
-    description: "Completed 10 tasks total.",
+    id: "ten_steps_done",
+    label: "10 Steps Done",
+    description: "Completed 10 steps total.",
     emoji: "✅",
-    earned: (s) => s.totalTasksCompleted >= 10,
+    earned: (s) => s.totalStepsCompleted >= 10,
+  },
+  {
+    id: "first_milestone",
+    label: "Milestone Reached",
+    description: "Completed your first milestone.",
+    emoji: "🚩",
+    earned: (s) => s.totalMilestonesCompleted >= 1,
   },
   {
     id: "first_goal_completed",
     label: "Goal Getter",
-    description: "Marked your first goal as achieved.",
+    description: "Completed your first goal.",
     emoji: "🏆",
-    earned: (s) => s.totalGoalsAchieved >= 1,
+    earned: (s) => s.totalGoalsCompleted >= 1,
   },
   {
     id: "thirty_day_streak",

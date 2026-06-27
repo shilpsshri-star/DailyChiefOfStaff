@@ -4,7 +4,7 @@
 // local development so `npm run dev` works without any setup.
 //
 // Every key is namespaced by Clerk user ID so each signed-in user gets their
-// own goals, tasks, briefings, chat history, end-of-day summaries, and stats.
+// own goals, milestones, steps, daily logs, weekly reviews, and stats.
 
 type KVLike = {
   get: <T>(key: string) => Promise<T | null>;
@@ -53,8 +53,9 @@ export async function kvSet(key: string, value: unknown): Promise<void> {
 
 export const KEYS = {
   profile: (userId: string) => `cos:${userId}:profile`,
-  briefing: (userId: string, date: string) => `cos:${userId}:briefing:${date}`,
-  eod: (userId: string, date: string) => `cos:${userId}:eod:${date}`,
-  chatHistory: (userId: string) => `cos:${userId}:chat:history`,
+  meta: (userId: string) => `cos:${userId}:meta`,
+  dailyLog: (userId: string, date: string) => `cos:${userId}:daily:${date}`,
+  weeklyReview: (userId: string, weekEnd: string) =>
+    `cos:${userId}:weekly:${weekEnd}`,
   stats: (userId: string) => `cos:${userId}:stats`,
 };

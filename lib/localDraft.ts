@@ -1,39 +1,35 @@
 "use client";
 
-import { EMPTY_PROFILE, Profile } from "./types";
+// Client-only storage for the anonymous trial: a guest can jot down their
+// goals on the Onboarding page without an account. Once they sign in, we
+// migrate this into their real per-user profile on the server and clear it.
+const DRAFT_KEY = "cos:draft:goals";
 
-// Client-only storage for the anonymous trial: a user can fill in Onboarding
-// without an account. Once they sign in, we migrate this into their real
-// per-user profile on the server and clear it.
-const DRAFT_KEY = "cos:draft:profile";
-
-export function loadDraft(): Profile {
-  if (typeof window === "undefined") return EMPTY_PROFILE;
+export function loadDraftGoals(): string[] {
+  if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(DRAFT_KEY);
-    if (!raw) return EMPTY_PROFILE;
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return {
-      goals: Array.isArray(parsed.goals) ? parsed.goals : EMPTY_PROFILE.goals,
-      tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
-      updatedAt: parsed.updatedAt ?? new Date(0).toISOString(),
-    };
+    return Array.isArray(parsed)
+      ? parsed.filter((g): g is string => typeof g === "string")
+      : [];
   } catch {
-    return EMPTY_PROFILE;
+    return [];
   }
 }
 
-export function saveDraft(profile: Profile): void {
+export function saveDraftGoals(goals: string[]): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(DRAFT_KEY, JSON.stringify(profile));
+  window.localStorage.setItem(DRAFT_KEY, JSON.stringify(goals));
 }
 
-export function clearDraft(): void {
+export function clearDraftGoals(): void {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(DRAFT_KEY);
 }
 
-export function hasDraft(): boolean {
+export function hasDraftGoals(): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(DRAFT_KEY) !== null;
 }

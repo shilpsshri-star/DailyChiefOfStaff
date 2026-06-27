@@ -11,9 +11,9 @@ import {
 
 const links = [
   { href: "/onboarding", label: "Onboarding" },
-  { href: "/briefing", label: "Morning Briefing" },
-  { href: "/chat", label: "Chat" },
-  { href: "/end-of-day", label: "End of Day" },
+  { href: "/goals", label: "Goals" },
+  { href: "/daily", label: "Daily Loop" },
+  { href: "/weekly", label: "Weekly Review" },
   { href: "/dashboard", label: "Dashboard" },
 ];
 

@@ -3,16 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useUser, SignInButton } from "@clerk/nextjs";
-import { EMPTY_PROFILE, Goal, Profile, Task } from "@/lib/types";
-import { loadDraft, saveDraft, clearDraft, hasDraft } from "@/lib/localDraft";
+import { Profile } from "@/lib/types";
+import {
+  loadDraftGoals,
+  saveDraftGoals,
+  clearDraftGoals,
+  hasDraftGoals,
+} from "@/lib/localDraft";
+
+const MAX_GOALS = 5;
 
 export default function OnboardingPage() {
   const router = useRouter();
   const { isLoaded, isSignedIn } = useUser();
 
-  const [goals, setGoals] = useState<Goal[]>(EMPTY_PROFILE.goals);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [newTask, setNewTask] = useState("");
+  const [goals, setGoals] = useState<string[]>([""]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -26,23 +31,24 @@ export default function OnboardingPage() {
     async function load() {
       if (isSignedIn) {
         // Just signed in and there's a local draft from the trial? Migrate it.
-        if (!wasSignedIn.current && hasDraft()) {
-          const draft = loadDraft();
-          await fetch("/api/profile", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(draft),
-          });
-          clearDraft();
+        if (!wasSignedIn.current && hasDraftGoals()) {
+          const draft = loadDraftGoals();
+          if (draft.some((g) => g.trim())) {
+            await fetch("/api/goals", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ goals: draft }),
+            });
+          }
+          clearDraftGoals();
         }
-        const res = await fetch("/api/profile");
+        const res = await fetch("/api/goals");
         const profile: Profile = await res.json();
-        setGoals(profile.goals);
-        setTasks(profile.tasks ?? []);
+        const texts = profile.goals.map((g) => g.text);
+        setGoals(texts.length ? texts : [""]);
       } else {
-        const draft = loadDraft();
-        setGoals(draft.goals);
-        setTasks(draft.tasks ?? []);
+        const draft = loadDraftGoals();
+        setGoals(draft.length ? draft : [""]);
       }
       wasSignedIn.current = Boolean(isSignedIn);
       setLoading(false);
@@ -54,33 +60,22 @@ export default function OnboardingPage() {
   // Auto-save to localStorage for guests, so the trial never loses work.
   useEffect(() => {
     if (loading || isSignedIn) return;
-    saveDraft({ goals, tasks, updatedAt: new Date().toISOString() });
-  }, [goals, tasks, loading, isSignedIn]);
+    saveDraftGoals(goals);
+  }, [goals, loading, isSignedIn]);
 
-  function updateGoalText(index: number, value: string) {
-    setGoals((prev) =>
-      prev.map((g, i) => (i === index ? { ...g, text: value } : g))
-    );
+  function updateGoal(index: number, value: string) {
+    setGoals((prev) => prev.map((g, i) => (i === index ? value : g)));
   }
 
-  function toggleGoalAchieved(index: number) {
-    setGoals((prev) =>
-      prev.map((g, i) => (i === index ? { ...g, achieved: !g.achieved } : g))
-    );
+  function addGoal() {
+    setGoals((prev) => (prev.length >= MAX_GOALS ? prev : [...prev, ""]));
   }
 
-  function addTask() {
-    const text = newTask.trim();
-    if (!text) return;
-    setTasks((prev) => [
-      ...prev,
-      { id: `task-${Date.now()}`, text, done: false },
-    ]);
-    setNewTask("");
-  }
-
-  function removeTask(id: string) {
-    setTasks((prev) => prev.filter((t) => t.id !== id));
+  function removeGoal(index: number) {
+    setGoals((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length ? next : [""];
+    });
   }
 
   async function save() {
@@ -88,11 +83,13 @@ export default function OnboardingPage() {
     setSaving(true);
     setSaved(false);
     try {
-      await fetch("/api/profile", {
+      const res = await fetch("/api/goals", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goals, tasks }),
+        body: JSON.stringify({ goals }),
       });
+      const profile: Profile = await res.json();
+      setGoals(profile.goals.length ? profile.goals.map((g) => g.text) : [""]);
       setSaved(true);
     } finally {
       setSaving(false);
@@ -100,7 +97,7 @@ export default function OnboardingPage() {
   }
 
   if (!isLoaded || loading) {
-    return <p className="text-ink/60">Loading your profile…</p>;
+    return <p className="text-ink/60">Loading your goals…</p>;
   }
 
   return (
@@ -108,108 +105,69 @@ export default function OnboardingPage() {
       <div>
         <h1 className="text-2xl font-semibold">Onboarding</h1>
         <p className="mt-1 text-ink/70">
-          Set your 5 goals and your task list. Your chief of staff will use these
-          everywhere — briefings, chat, and end-of-day summaries.
+          Write down 1 to 5 goals, in whatever words come naturally — no
+          structure required. Your chief of staff will turn each one into
+          milestones and concrete daily steps once you activate it.
         </p>
         {!isSignedIn && (
           <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            You're trying this out as a guest — your goals and tasks are saved
-            in this browser only. Sign in with Google or LinkedIn any time to
-            save permanently and unlock Briefing, Chat, End of Day, and your
+            You're trying this out as a guest — your goals are saved in this
+            browser only. Sign in with Google or LinkedIn any time to save
+            permanently and unlock activation, the daily loop, and your
             Dashboard.
           </div>
         )}
       </div>
 
       <section className="card p-5">
-        <h2 className="font-medium">Your 5 goals</h2>
+        <h2 className="font-medium">Your goals</h2>
         <p className="mt-1 text-sm text-ink/60">
-          Rank them in priority order — #1 matters most. Check a goal off once
-          you've achieved it.
+          Up to {MAX_GOALS}. Just write what you want, in your own words.
         </p>
         <div className="mt-4 space-y-3">
-          {goals.map((goal, i) => (
+          {goals.map((text, i) => (
             <div key={i} className="flex items-center gap-3">
               <span className="w-5 shrink-0 text-sm text-ink/50">{i + 1}.</span>
               <input
                 className="input"
                 placeholder={`Goal #${i + 1}`}
-                value={goal.text}
-                onChange={(e) => updateGoalText(i, e.target.value)}
+                value={text}
+                onChange={(e) => updateGoal(i, e.target.value)}
               />
-              <label className="flex shrink-0 items-center gap-1.5 text-xs text-ink/60">
-                <input
-                  type="checkbox"
-                  checked={goal.achieved}
-                  onChange={() => toggleGoalAchieved(i)}
-                  disabled={!goal.text.trim()}
-                />
-                Achieved
-              </label>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="card p-5">
-        <h2 className="font-medium">Your tasks</h2>
-        <p className="mt-1 text-sm text-ink/60">
-          Add everything on your plate — your chief of staff will help you sort it.
-        </p>
-
-        <div className="mt-4 flex gap-2">
-          <input
-            className="input"
-            placeholder="Add a task and press Enter"
-            value={newTask}
-            onChange={(e) => setNewTask(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addTask();
-              }
-            }}
-          />
-          <button className="btn-primary" onClick={addTask} type="button">
-            Add
-          </button>
-        </div>
-
-        <ul className="mt-4 space-y-2">
-          {tasks.length === 0 && (
-            <p className="text-sm text-ink/50">No tasks yet.</p>
-          )}
-          {tasks.map((task) => (
-            <li
-              key={task.id}
-              className="flex items-center justify-between rounded-md border border-[#e8e6e1] px-3 py-2"
-            >
-              <span className="text-sm">{task.text}</span>
               <button
-                className="text-sm text-ink/40 hover:text-red-500"
-                onClick={() => removeTask(task.id)}
+                className="shrink-0 text-sm text-ink/40 hover:text-red-500"
+                onClick={() => removeGoal(i)}
                 type="button"
               >
                 Remove
               </button>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
+        {goals.length < MAX_GOALS && (
+          <button
+            className="mt-4 text-sm text-accent hover:underline"
+            onClick={addGoal}
+            type="button"
+          >
+            + Add another goal
+          </button>
+        )}
       </section>
 
       <div className="flex items-center gap-3">
         {isSignedIn ? (
           <>
             <button className="btn-primary" disabled={saving} onClick={save}>
-              {saving ? "Saving…" : "Save"}
+              {saving ? "Saving…" : "Save goals"}
             </button>
             {saved && <span className="text-sm text-green-600">Saved!</span>}
             <button
               className="text-sm text-accent hover:underline"
-              onClick={() => router.push("/briefing")}
+              onClick={() => router.push("/goals")}
               type="button"
             >
-              Go to Morning Briefing →
+              Go activate a goal →
             </button>
           </>
         ) : (

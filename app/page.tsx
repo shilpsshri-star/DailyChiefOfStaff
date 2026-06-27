@@ -4,22 +4,22 @@ const steps = [
   {
     href: "/onboarding",
     title: "1. Onboarding",
-    desc: "Set your 5 goals and your task list. Do this once, update anytime.",
+    desc: "Write 1-5 goals in free text, no structure required. Do this once, update anytime.",
   },
   {
-    href: "/briefing",
-    title: "2. Morning Briefing",
-    desc: "Your AI chief of staff reads your goals and tasks, then tells you your top 3 priorities for today, with reasoning.",
+    href: "/goals",
+    title: "2. Activate a goal",
+    desc: "Your chief of staff breaks a goal into 3-5 milestones, then the first milestone into 5-7 concrete steps. You confirm or edit before anything goes live.",
   },
   {
-    href: "/chat",
-    title: "3. Chat",
-    desc: "Talk to your chief of staff any time — it always has your goals and tasks as context.",
+    href: "/daily",
+    title: "3. Daily Loop",
+    desc: "Each morning it picks 3 focus items from your active steps and explains why. Each evening you mark done, blocked, or skipped with a one-line reason, and it adjusts the plan.",
   },
   {
-    href: "/end-of-day",
-    title: "4. End of Day",
-    desc: "Check off what you got done. Your chief of staff gives you a short summary and a nudge for tomorrow.",
+    href: "/weekly",
+    title: "4. Weekly Review",
+    desc: "Every 7 days: what moved, what's stuck, a replanned next sprint, and an explicit win celebration.",
   },
   {
     href: "/dashboard",
@@ -34,12 +34,13 @@ export default function Home() {
       <div>
         <h1 className="text-2xl font-semibold">Welcome back</h1>
         <p className="mt-1 text-ink/70">
-          Your daily rhythm: onboard once, get a morning briefing, chat as needed, close the loop at night.
+          Your daily rhythm: onboard once, activate a goal, run the daily
+          loop, and let weekly review keep the plan honest.
         </p>
         <p className="mt-2 text-sm text-ink/60">
           Try Onboarding free as a guest — sign in with Google or LinkedIn any
-          time to save permanently and unlock Briefing, Chat, End of Day, and
-          your Dashboard.
+          time to save permanently and unlock activation, the Daily Loop,
+          Weekly Review, and your Dashboard.
         </p>
       </div>
 

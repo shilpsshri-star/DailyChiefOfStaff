@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { kvGet, KEYS } from "@/lib/kv";
 import { requireUserId, unauthorized } from "@/lib/auth";
-import { Briefing, EndOfDaySummary } from "@/lib/types";
+import { DailyLog } from "@/lib/types";
 
-// Memory Lane: fetch what happened on a specific past date.
+// Memory Lane: fetch what was focused on / accomplished on a specific past date.
 export async function GET(
   _req: Request,
   { params }: { params: { date: string } }
@@ -16,10 +16,6 @@ export async function GET(
     return NextResponse.json({ error: "Invalid date." }, { status: 400 });
   }
 
-  const [briefing, eod] = await Promise.all([
-    kvGet<Briefing>(KEYS.briefing(userId, date)),
-    kvGet<EndOfDaySummary>(KEYS.eod(userId, date)),
-  ]);
-
-  return NextResponse.json({ date, briefing, eod });
+  const log = await kvGet<DailyLog>(KEYS.dailyLog(userId, date));
+  return NextResponse.json({ date, log });
 }
