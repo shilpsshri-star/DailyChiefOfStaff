@@ -48,6 +48,7 @@ function GoalDetailContent() {
   const [draftSteps, setDraftSteps] = useState<DraftStep[] | null>(null);
   const [draftMilestoneId, setDraftMilestoneId] = useState<string | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  const [activeMilestoneIndex, setActiveMilestoneIndex] = useState(0);
 
   async function load() {
     if (isSignedIn) {
@@ -152,6 +153,66 @@ function GoalDetailContent() {
     }
   }
 
+  // Pure helper: returns a new Profile with one milestone's targetDate
+  // replaced. Mirrors updateStepNotesInProfile above.
+  function updateMilestoneTargetDateInProfile(
+    p: Profile,
+    milestoneId: string,
+    targetDate: string | null
+  ): Profile {
+    return {
+      ...p,
+      goals: p.goals.map((g) =>
+        g.id !== goalId
+          ? g
+          : {
+              ...g,
+              milestones: g.milestones.map((m) =>
+                m.id === milestoneId ? { ...m, targetDate } : m
+              ),
+            }
+      ),
+    };
+  }
+
+  async function saveMilestoneTargetDate(milestoneId: string, targetDate: string | null) {
+    if (isSignedIn) {
+      try {
+        const res = await fetch(`/api/goals/${goalId}/milestones/${milestoneId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ targetDate }),
+        });
+        if (!res.ok) {
+          setError("Couldn't save the target date. Try again.");
+          return;
+        }
+        setProfile((prev) =>
+          updateMilestoneTargetDateInProfile(prev, milestoneId, targetDate)
+        );
+      } catch {
+        setError("Couldn't reach the server. Try again.");
+      }
+    } else {
+      const updatedProfile = updateMilestoneTargetDateInProfile(
+        profile,
+        milestoneId,
+        targetDate
+      );
+      saveGuestProfile(updatedProfile);
+      setProfile(updatedProfile);
+    }
+  }
+
+  // Days remaining until a milestone's target date, or null if no date is
+  // set. Negative means overdue.
+  function daysUntil(dateStr: string): number {
+    const target = new Date(dateStr + "T00:00:00");
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((target.getTime() - today.getTime()) / 86400000);
+  }
+
   const proposedMilestones = goal.milestones.filter((m) => m.status === "proposed");
   const confirmedMilestones = goal.milestones
     .filter((m) => m.status !== "proposed")
@@ -159,6 +220,30 @@ function GoalDetailContent() {
   const allMilestonesDone =
     confirmedMilestones.length > 0 &&
     confirmedMilestones.every((m) => m.status === "completed");
+
+  // Goal-level progress, used for the overall progress bar above the
+  // milestone carousel: milestones completed, and steps completed across
+  // every confirmed milestone.
+  const totalMilestoneCount = confirmedMilestones.length;
+  const doneMilestoneCount = confirmedMilestones.filter(
+    (m) => m.status === "completed"
+  ).length;
+  const totalStepCount = confirmedMilestones.reduce(
+    (sum, m) => sum + m.steps.length,
+    0
+  );
+  const doneStepCount = confirmedMilestones.reduce(
+    (sum, m) => sum + m.steps.filter((s) => s.status === "done").length,
+    0
+  );
+  const goalProgressPct =
+    totalStepCount > 0 ? Math.round((doneStepCount / totalStepCount) * 100) : 0;
+
+  const safeMilestoneIndex = Math.min(
+    activeMilestoneIndex,
+    Math.max(confirmedMilestones.length - 1, 0)
+  );
+  const activeMilestone = confirmedMilestones[safeMilestoneIndex];
 
   async function generateMilestones() {
     setBusy(true);
@@ -450,14 +535,64 @@ function GoalDetailContent() {
           <p className="mt-1 text-sm text-ink/60">
             Steps are generated for every milestone as soon as it's confirmed.
           </p>
-          <div className="mt-4 space-y-5">
-            {confirmedMilestones.map((m, i) => {
-              const isEditingThis = draftSteps && draftMilestoneId === m.id;
-              return (
-                <div key={m.id} className="rounded-md border border-[#e8e6e1] p-4">
+
+          {/* Goal-level progress: steps done across every confirmed milestone. */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between text-xs text-ink/60">
+              <span>
+                {doneMilestoneCount}/{totalMilestoneCount} milestones ·{" "}
+                {doneStepCount}/{totalStepCount} steps done
+              </span>
+              <span>{goalProgressPct}%</span>
+            </div>
+            <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-[#f1efe9]">
+              <div
+                className="h-full rounded-full bg-accent transition-all"
+                style={{ width: `${goalProgressPct}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Milestone carousel: one milestone visible at a time, with
+              prev/next nav, instead of every milestone's full step list
+              stacked at once. */}
+          {(() => {
+            const m = activeMilestone;
+            if (!m) return null;
+            const isEditingThis = draftSteps && draftMilestoneId === m.id;
+            const days = m.targetDate ? daysUntil(m.targetDate) : null;
+            return (
+              <div className="mt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    className="rounded-md px-2 py-1 text-sm text-ink/50 hover:bg-[#f1efe9] disabled:opacity-30"
+                    type="button"
+                    disabled={safeMilestoneIndex === 0}
+                    onClick={() => setActiveMilestoneIndex((idx) => Math.max(idx - 1, 0))}
+                  >
+                    ← Prev
+                  </button>
+                  <span className="text-xs text-ink/50">
+                    Milestone {safeMilestoneIndex + 1} of {totalMilestoneCount}
+                  </span>
+                  <button
+                    className="rounded-md px-2 py-1 text-sm text-ink/50 hover:bg-[#f1efe9] disabled:opacity-30"
+                    type="button"
+                    disabled={safeMilestoneIndex >= totalMilestoneCount - 1}
+                    onClick={() =>
+                      setActiveMilestoneIndex((idx) =>
+                        Math.min(idx + 1, totalMilestoneCount - 1)
+                      )
+                    }
+                  >
+                    Next →
+                  </button>
+                </div>
+
+                <div className="mt-3 rounded-md border border-[#e8e6e1] p-4">
                   <div className="flex items-center justify-between gap-3">
                     <span className="font-medium">
-                      {i + 1}. {m.text}
+                      {safeMilestoneIndex + 1}. {m.text}
                     </span>
                     <span
                       className={
@@ -471,6 +606,32 @@ function GoalDetailContent() {
                         ? "done"
                         : `${m.steps.filter((s) => s.status === "done").length}/${m.steps.length} steps`}
                     </span>
+                  </div>
+
+                  <div className="mt-2 flex items-center gap-2 text-xs text-ink/60">
+                    <label htmlFor={`target-date-${m.id}`}>Target date:</label>
+                    <input
+                      id={`target-date-${m.id}`}
+                      type="date"
+                      className="input w-auto py-1 text-xs"
+                      value={m.targetDate ?? ""}
+                      onChange={(e) =>
+                        saveMilestoneTargetDate(m.id, e.target.value || null)
+                      }
+                    />
+                    {days !== null && m.status !== "completed" && (
+                      <span
+                        className={
+                          days < 0 ? "font-medium text-red-600" : "text-ink/50"
+                        }
+                      >
+                        {days < 0
+                          ? `${Math.abs(days)} day(s) overdue`
+                          : days === 0
+                          ? "due today"
+                          : `${days} day(s) left`}
+                      </span>
+                    )}
                   </div>
 
                   {m.steps.length === 0 && !isEditingThis && (
@@ -670,9 +831,9 @@ function GoalDetailContent() {
                     </div>
                   )}
                 </div>
-              );
-            })}
-          </div>
+              </div>
+            );
+          })()}
           {proposedMilestones.length > 0 && (
             <p className="mt-3 text-xs text-ink/40">
               ({proposedMilestones.length} proposed milestone(s) not yet confirmed —

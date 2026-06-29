@@ -121,6 +121,7 @@ export async function loadProfile(userId: string): Promise<Profile> {
       order: (row.order as number) ?? 0,
       status: row.status as Milestone["status"],
       steps: stepsByMilestone.get(row.id as string) ?? [],
+      targetDate: (row.target_date as string | null) ?? null,
     };
     const goalId = row.goal_id as string;
     const list = milestonesByGoal.get(goalId) ?? [];
@@ -189,6 +190,7 @@ export async function saveProfile(
         title: m.text,
         order: m.order,
         status: m.status,
+        target_date: m.targetDate ?? null,
       });
       for (const s of m.steps) {
         stepRows.push({

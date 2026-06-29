@@ -28,6 +28,7 @@ export interface Milestone {
   order: number;
   status: MilestoneStatus;
   steps: Step[]; // populated for every milestone as soon as it's confirmed
+  targetDate: string | null; // YYYY-MM-DD, user-set; null if not set. Not AI-projected on purpose.
 }
 
 export interface Goal {

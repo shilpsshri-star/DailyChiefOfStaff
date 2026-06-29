@@ -46,6 +46,7 @@ export async function POST(
       order: i,
       status: "proposed",
       steps: [],
+      targetDate: null,
     })) as Milestone[];
     return NextResponse.json({ milestones });
   }
@@ -75,6 +76,7 @@ export async function POST(
     order: i,
     status: "proposed",
     steps: [],
+    targetDate: null,
   })) as Milestone[];
 
   profile.updatedAt = new Date().toISOString();
@@ -137,6 +139,7 @@ export async function PUT(
         order: i,
         status: "confirmed",
         steps: [],
+        targetDate: null,
       }))
       .filter((m) => m.text.length > 0) as Milestone[];
 
@@ -171,6 +174,10 @@ export async function PUT(
         order: i,
         status: "confirmed",
         steps: prior?.steps ?? [],
+        targetDate:
+          typeof (m as { targetDate?: unknown }).targetDate === "string"
+            ? (m as { targetDate?: string }).targetDate ?? null
+            : prior?.targetDate ?? null,
       } as Milestone;
     })
     .filter((m) => m.text.length > 0);

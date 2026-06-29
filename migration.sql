@@ -45,6 +45,7 @@ create table if not exists milestones (
   "order" integer not null default 0,
   status text not null default 'proposed'
     check (status in ('proposed', 'confirmed', 'completed')),
+  target_date date,
   created_at timestamptz not null default now()
 );
 create index if not exists milestones_goal_id_idx on milestones (goal_id);
@@ -91,6 +92,7 @@ end $$;
 
 alter table steps add column if not exists resource text not null default '';
 alter table steps add column if not exists notes text not null default '';
+alter table milestones add column if not exists target_date date;
 
 -- One row per (user, date, step) focused on that day. Day-level fields
 -- (morning_generated_at, evening_completed_at, adjustment_note) are
