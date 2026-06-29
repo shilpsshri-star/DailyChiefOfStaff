@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { kvGet, KEYS } from "@/lib/kv";
+import { loadDailyLog } from "@/lib/db";
 import { requireUserId, unauthorized } from "@/lib/auth";
-import { DailyLog } from "@/lib/types";
 
 // Memory Lane: fetch what was focused on / accomplished on a specific past date.
 export async function GET(
@@ -16,6 +15,6 @@ export async function GET(
     return NextResponse.json({ error: "Invalid date." }, { status: 400 });
   }
 
-  const log = await kvGet<DailyLog>(KEYS.dailyLog(userId, date));
+  const log = await loadDailyLog(userId, date);
   return NextResponse.json({ date, log });
 }

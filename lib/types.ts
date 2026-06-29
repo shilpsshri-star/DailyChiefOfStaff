@@ -1,9 +1,10 @@
 // Core data model for the Daily Chief of Staff goal-execution workflow.
 //
-// Hierarchy: Goal -> Milestones (3-5) -> Steps (5-7, only generated for the
-// active milestone). Steps are the unit of daily work. Daily logs record
-// what was focused on each morning and what actually happened each evening.
-// Weekly reviews summarize a rolling 7-day window per user.
+// Hierarchy: Goal -> Milestones (3-5) -> Steps (5-7 per milestone, generated
+// for every milestone as soon as it's confirmed). Steps are the unit of
+// daily work. Daily logs record what was focused on each morning and what
+// actually happened each evening. Weekly reviews summarize a rolling 7-day
+// window per user.
 
 export type StepStatus = "pending" | "active" | "done" | "blocked" | "skipped";
 export type MilestoneStatus = "proposed" | "confirmed" | "completed";
@@ -11,12 +12,14 @@ export type GoalStatus = "inactive" | "active" | "completed";
 
 export interface Step {
   id: string;
-  text: string; // concrete action
-  output: string; // what "done" looks like for this step
-  estimatedDays: number;
+  text: string; // concrete action — names a specific resource/tool/link, not vague advice
+  resource: string; // a suggested resource or tool (a named site, course, template, app — a link where possible)
+  output: string; // the deliverable: what concretely exists or is true once it's finished
+  estimatedHours: number; // estimated time to complete, in hours (not days)
   dependencies: string[]; // ids of other steps within the same milestone that must be done first
   status: StepStatus;
   order: number;
+  notes: string; // freeform notes the user jots while working this step (links, findings, etc.) — persists across visits
 }
 
 export interface Milestone {
@@ -24,7 +27,7 @@ export interface Milestone {
   text: string;
   order: number;
   status: MilestoneStatus;
-  steps: Step[]; // only populated once this milestone has been broken down
+  steps: Step[]; // populated for every milestone as soon as it's confirmed
 }
 
 export interface Goal {

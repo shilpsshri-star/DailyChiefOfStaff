@@ -1,24 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useEffect, useRef, useState } from "react";
+import { useUser, SignInButton } from "@clerk/nextjs";
 import Link from "next/link";
 import { Goal, Profile, EMPTY_PROFILE } from "@/lib/types";
-import AuthGate from "@/components/AuthGate";
+import { ensureGuestMigrated, loadGuestProfile } from "@/lib/guestStore";
 
 export default function GoalsPage() {
-  const { isLoaded, isSignedIn } = useUser();
+  const { isLoaded } = useUser();
 
   if (!isLoaded) return <p className="text-ink/60">Loading…</p>;
 
-  return (
-    <AuthGate
-      title="Activate your goals"
-      description="Sign in with Google or LinkedIn to turn your goals into milestones and concrete daily steps."
-    >
-      {isSignedIn && <GoalsContent />}
-    </AuthGate>
-  );
+  return <GoalsContent />;
 }
 
 function statusBadge(status: Goal["status"]) {
@@ -35,15 +28,25 @@ function statusBadge(status: Goal["status"]) {
 }
 
 function GoalsContent() {
+  const { isSignedIn } = useUser();
   const [profile, setProfile] = useState<Profile>(EMPTY_PROFILE);
   const [loading, setLoading] = useState(true);
+  const wasSignedIn = useRef(false);
 
   useEffect(() => {
-    fetch("/api/goals")
-      .then((r) => r.json())
-      .then((data) => setProfile(data))
-      .finally(() => setLoading(false));
-  }, []);
+    async function load() {
+      if (isSignedIn) {
+        if (!wasSignedIn.current) await ensureGuestMigrated();
+        const res = await fetch("/api/goals");
+        setProfile(await res.json());
+      } else {
+        setProfile(loadGuestProfile());
+      }
+      wasSignedIn.current = Boolean(isSignedIn);
+      setLoading(false);
+    }
+    load();
+  }, [isSignedIn]);
 
   if (loading) return <p className="text-ink/60">Loading…</p>;
 
@@ -54,6 +57,18 @@ function GoalsContent() {
         <p className="mt-1 text-ink/70">
           Pick a goal to break it into milestones and steps.
         </p>
+        {!isSignedIn && (
+          <div className="mt-3 flex flex-col items-start gap-3 rounded-md border border-accent/30 bg-accent/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-ink">
+              Login to save your progress and access it every day.
+            </p>
+            <SignInButton mode="modal" fallbackRedirectUrl="/goals">
+              <button className="btn-primary shrink-0 px-4 py-2 text-sm">
+                Continue with Google or LinkedIn
+              </button>
+            </SignInButton>
+          </div>
+        )}
       </div>
 
       {profile.goals.length === 0 ? (

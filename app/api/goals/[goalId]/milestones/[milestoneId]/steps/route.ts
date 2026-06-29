@@ -1,19 +1,75 @@
 import { NextRequest, NextResponse } from "next/server";
-import { kvGet, kvSet, KEYS } from "@/lib/kv";
-import { requireUserId, unauthorized } from "@/lib/auth";
+import { loadProfile, saveProfile } from "@/lib/db";
+import { requireUserId } from "@/lib/auth";
 import { breakdownMilestoneIntoSteps } from "@/lib/planner";
-import { findGoal, findMilestone, genId } from "@/lib/goals";
-import { EMPTY_PROFILE, Profile, Step } from "@/lib/types";
+import {
+  buildStepsFromInput,
+  findGoal,
+  findMilestone,
+  genId,
+  RawStepInput,
+} from "@/lib/goals";
+import { Step } from "@/lib/types";
 
 // Generate (or regenerate) the AI's proposed steps for one milestone.
+// Used for the initial automatic generation (now triggered for every
+// milestone right after confirming) as well as a manual "Regenerate" for
+// a single milestone.
+//
+// Guests send { goalText, milestoneText } and get back a bare { steps }
+// with no persistence -- the client merges that into its own
+// localStorage-held Profile (lib/guestStore.ts).
 export async function POST(
   req: NextRequest,
   { params }: { params: { goalId: string; milestoneId: string } }
 ) {
   const userId = await requireUserId();
-  if (!userId) return unauthorized();
 
-  const profile = (await kvGet<Profile>(KEYS.profile(userId))) ?? EMPTY_PROFILE;
+  if (!userId) {
+    const body = await req.json().catch(() => ({}));
+    const goalText = typeof body.goalText === "string" ? body.goalText.trim() : "";
+    const milestoneText =
+      typeof body.milestoneText === "string" ? body.milestoneText.trim() : "";
+    if (!goalText || !milestoneText) {
+      return NextResponse.json(
+        { error: "Missing goalText or milestoneText." },
+        { status: 400 }
+      );
+    }
+
+    let proposed;
+    try {
+      proposed = await breakdownMilestoneIntoSteps(goalText, milestoneText);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+    if (proposed.length === 0) {
+      return NextResponse.json(
+        { error: "Couldn't generate steps. Try again." },
+        { status: 500 }
+      );
+    }
+
+    const ids = proposed.map(() => genId("step"));
+    const steps: Step[] = proposed.map((s, i) => ({
+      id: ids[i],
+      text: s.text,
+      resource: s.resource,
+      output: s.output,
+      estimatedHours: s.estimatedHours,
+      dependencies: s.dependsOnIndexes
+        .filter((idx) => idx >= 0 && idx < ids.length && idx !== i)
+        .map((idx) => ids[idx]),
+      status: "pending",
+      order: i,
+      notes: "",
+    })) as Step[];
+
+    return NextResponse.json({ steps });
+  }
+
+  const profile = await loadProfile(userId);
   const goal = findGoal(profile, params.goalId);
   if (!goal) return NextResponse.json({ error: "Goal not found" }, { status: 404 });
   const milestone = findMilestone(goal, params.milestoneId);
@@ -39,85 +95,56 @@ export async function POST(
   milestone.steps = proposed.map((s, i) => ({
     id: ids[i],
     text: s.text,
+    resource: s.resource,
     output: s.output,
-    estimatedDays: s.estimatedDays,
+    estimatedHours: s.estimatedHours,
     dependencies: s.dependsOnIndexes
       .filter((idx) => idx >= 0 && idx < ids.length && idx !== i)
       .map((idx) => ids[idx]),
     status: "pending",
     order: i,
+    notes: "",
   })) as Step[];
 
   profile.updatedAt = new Date().toISOString();
-  await kvSet(KEYS.profile(userId), profile);
+  await saveProfile(userId, profile);
 
   return NextResponse.json(milestone);
 }
 
 // Confirm/edit the proposed steps and activate this milestone (and its
-// goal) for the daily loop.
+// goal) for the daily loop. Pure validation/cleaning, no AI call -- so
+// guests never need to hit this route at all; the client runs the same
+// buildStepsFromInput() helper (lib/goals.ts) directly against its
+// localStorage Profile instead.
 export async function PUT(
   req: NextRequest,
   { params }: { params: { goalId: string; milestoneId: string } }
 ) {
   const userId = await requireUserId();
-  if (!userId) return unauthorized();
+  if (!userId) {
+    return NextResponse.json(
+      { error: "Sign in with Google or LinkedIn to use this." },
+      { status: 401 }
+    );
+  }
 
   const body = await req.json();
-  const rawSteps: unknown[] = Array.isArray(body.steps) ? body.steps : [];
+  const rawSteps: RawStepInput[] = Array.isArray(body.steps) ? body.steps : [];
 
-  const profile = (await kvGet<Profile>(KEYS.profile(userId))) ?? EMPTY_PROFILE;
+  const profile = await loadProfile(userId);
   const goal = findGoal(profile, params.goalId);
   if (!goal) return NextResponse.json({ error: "Goal not found" }, { status: 404 });
   const milestone = findMilestone(goal, params.milestoneId);
   if (!milestone)
     return NextResponse.json({ error: "Milestone not found" }, { status: 404 });
 
-  const existingById = new Map(milestone.steps.map((s) => [s.id, s]));
-
-  // First pass: assign/keep ids so dependency-by-id references stay valid
-  // even if the client edited text but kept the same id.
-  const cleaned = rawSteps
-    .filter(
-      (s): s is Record<string, unknown> => typeof s === "object" && s !== null
-    )
-    .map((s) => {
-      const prior =
-        typeof s.id === "string" ? existingById.get(s.id) : undefined;
-      return {
-        id: prior?.id ?? (typeof s.id === "string" ? s.id : genId("step")),
-        text: typeof s.text === "string" ? s.text.trim() : prior?.text ?? "",
-        output:
-          typeof s.output === "string" ? s.output.trim() : prior?.output ?? "",
-        estimatedDays:
-          typeof s.estimatedDays === "number" && s.estimatedDays > 0
-            ? Math.round(s.estimatedDays)
-            : prior?.estimatedDays ?? 1,
-        dependencies: Array.isArray(s.dependencies)
-          ? s.dependencies.filter((d: unknown) => typeof d === "string")
-          : prior?.dependencies ?? [],
-        status: prior?.status ?? "pending",
-      };
-    })
-    .filter((s) => s.text.length > 0);
-
-  const validIds = new Set(cleaned.map((s) => s.id));
-
-  milestone.steps = cleaned.map((s, i) => ({
-    id: s.id,
-    text: s.text,
-    output: s.output,
-    estimatedDays: s.estimatedDays,
-    dependencies: s.dependencies.filter((d) => validIds.has(d) && d !== s.id),
-    status: s.status,
-    order: i,
-  })) as Step[];
-
+  milestone.steps = buildStepsFromInput(milestone.steps, rawSteps);
   milestone.status = "confirmed";
   goal.status = goal.status === "completed" ? goal.status : "active";
 
   profile.updatedAt = new Date().toISOString();
-  await kvSet(KEYS.profile(userId), profile);
+  await saveProfile(userId, profile);
 
   return NextResponse.json({ goal, milestone });
 }

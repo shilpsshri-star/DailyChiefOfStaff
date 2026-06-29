@@ -1,11 +1,11 @@
-import { NextResponse } from "next/server";
-import { kvGet, kvSet, KEYS } from "@/lib/kv";
+import { NextRequest, NextResponse } from "next/server";
+import { loadProfile, saveProfile, loadDailyLog, saveDailyLog } from "@/lib/db";
 import { requireUserId, unauthorized } from "@/lib/auth";
-import { pickDailyFocus } from "@/lib/planner";
+import { FocusCandidate, pickDailyFocus } from "@/lib/planner";
 import { getCandidateSteps } from "@/lib/goals";
 import { dateMinusDays, todayKey } from "@/lib/date";
 import { recordActivity } from "@/lib/stats";
-import { DailyLog, EMPTY_DAILY_LOG, EMPTY_PROFILE, Profile } from "@/lib/types";
+import { DailyLog, EMPTY_DAILY_LOG } from "@/lib/types";
 
 function recapFromYesterday(log: DailyLog | null): string {
   if (!log || log.results.length === 0) return "";
@@ -19,26 +19,55 @@ function recapFromYesterday(log: DailyLog | null): string {
   }`;
 }
 
+// Guests never call this GET -- they read today's log straight out of
+// localStorage (lib/guestStore.ts) since there's nothing server-side to load.
 export async function GET() {
   const userId = await requireUserId();
   if (!userId) return unauthorized();
 
   const date = todayKey();
-  const log = await kvGet<DailyLog>(KEYS.dailyLog(userId, date));
+  const log = await loadDailyLog(userId, date);
   return NextResponse.json(log ?? EMPTY_DAILY_LOG(date));
 }
 
-export async function POST() {
+// Signed-in callers: unchanged -- loads the profile from Supabase, picks
+// focus, persists the updated profile + daily log.
+//
+// Guests have no server-side profile, so they instead send the exact
+// candidate list (computed client-side via getCandidateSteps() against
+// their localStorage Profile) plus a recap string, and get back the bare
+// AI picks with no persistence. The client then builds the DailyFocusItem
+// list and marks steps "active" in its own local Profile.
+export async function POST(req: NextRequest) {
   const userId = await requireUserId();
-  if (!userId) return unauthorized();
+
+  if (!userId) {
+    const body = await req.json().catch(() => ({}));
+    const candidates: FocusCandidate[] = Array.isArray(body.candidates)
+      ? body.candidates
+      : [];
+    const recap = typeof body.recap === "string" ? body.recap : "";
+
+    if (candidates.length === 0) {
+      return NextResponse.json({ picks: [] });
+    }
+
+    try {
+      const picks = await pickDailyFocus(candidates, recap);
+      return NextResponse.json({ picks });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
 
   const date = todayKey();
-  const existing = await kvGet<DailyLog>(KEYS.dailyLog(userId, date));
+  const existing = await loadDailyLog(userId, date);
   if (existing && existing.morningGeneratedAt) {
     return NextResponse.json(existing);
   }
 
-  const profile = (await kvGet<Profile>(KEYS.profile(userId))) ?? EMPTY_PROFILE;
+  const profile = await loadProfile(userId);
   const candidates = getCandidateSteps(profile);
 
   if (candidates.length === 0) {
@@ -46,13 +75,11 @@ export async function POST() {
       ...EMPTY_DAILY_LOG(date),
       morningGeneratedAt: new Date().toISOString(),
     };
-    await kvSet(KEYS.dailyLog(userId, date), log);
+    await saveDailyLog(userId, log);
     return NextResponse.json(log);
   }
 
-  const yesterday = await kvGet<DailyLog>(
-    KEYS.dailyLog(userId, dateMinusDays(date, 1))
-  );
+  const yesterday = await loadDailyLog(userId, dateMinusDays(date, 1));
 
   let picks;
   try {
@@ -75,7 +102,7 @@ export async function POST() {
       }
     }
   }
-  await kvSet(KEYS.profile(userId), profile);
+  await saveProfile(userId, profile);
 
   const focusItems = picks
     .map((p) => {
@@ -114,7 +141,7 @@ export async function POST() {
     eveningCompletedAt: null,
   };
 
-  await kvSet(KEYS.dailyLog(userId, date), log);
+  await saveDailyLog(userId, log);
   await recordActivity(userId, date);
 
   return NextResponse.json(log);

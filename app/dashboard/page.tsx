@@ -1,24 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useEffect, useRef, useState } from "react";
+import { useUser, SignInButton } from "@clerk/nextjs";
 import { Badge, DailyLog, UserStats } from "@/lib/types";
 import { todayKey } from "@/lib/date";
-import AuthGate from "@/components/AuthGate";
+import {
+  computeEarnedBadges,
+  monthlyCompletedCount,
+  weeklyCompletedCount,
+} from "@/lib/statsCore";
+import {
+  ensureGuestMigrated,
+  loadGuestDailyLog,
+  loadGuestStats,
+} from "@/lib/guestStore";
 
 export default function DashboardPage() {
-  const { isLoaded, isSignedIn } = useUser();
+  const { isLoaded } = useUser();
 
   if (!isLoaded) return <p className="text-ink/60">Loading…</p>;
 
-  return (
-    <AuthGate
-      title="Your Progress Dashboard"
-      description="Sign in with Google or LinkedIn to see your stats, streaks, badges, and Memory Lane."
-    >
-      {isSignedIn && <DashboardContent />}
-    </AuthGate>
-  );
+  return <DashboardContent />;
 }
 
 interface StatsResponse {
@@ -39,27 +41,51 @@ function dateMinusDays(date: string, days: number): string {
 }
 
 function DashboardContent() {
+  const { isSignedIn } = useUser();
   const [data, setData] = useState<StatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [dayDetail, setDayDetail] = useState<DailyLog | null>(null);
   const [dayLoading, setDayLoading] = useState(false);
+  const wasSignedIn = useRef(false);
 
   useEffect(() => {
-    fetch("/api/stats")
-      .then((r) => r.json())
-      .then(setData)
-      .finally(() => setLoading(false));
-  }, []);
+    async function load() {
+      setLoading(true);
+      if (isSignedIn) {
+        if (!wasSignedIn.current) await ensureGuestMigrated();
+        const res = await fetch("/api/stats");
+        setData(await res.json());
+      } else {
+        const today = todayKey();
+        const stats = loadGuestStats();
+        setData({
+          stats,
+          badges: computeEarnedBadges(stats),
+          todayCompleted: stats.completedByDate[today] ?? 0,
+          weekCompleted: weeklyCompletedCount(stats, today),
+          monthCompleted: monthlyCompletedCount(stats, today),
+        });
+      }
+      wasSignedIn.current = Boolean(isSignedIn);
+      setLoading(false);
+    }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSignedIn]);
 
   async function viewDay(date: string) {
     setSelectedDate(date);
     setDayLoading(true);
     setDayDetail(null);
     try {
-      const res = await fetch(`/api/day/${date}`);
-      const json = await res.json();
-      setDayDetail(json.log ?? null);
+      if (isSignedIn) {
+        const res = await fetch(`/api/day/${date}`);
+        const json = await res.json();
+        setDayDetail(json.log ?? null);
+      } else {
+        setDayDetail(loadGuestDailyLog(date));
+      }
     } finally {
       setDayLoading(false);
     }
@@ -93,6 +119,19 @@ function DashboardContent() {
           Your streaks, stats, badges, and a timeline of every day you've shown up.
         </p>
       </div>
+
+      {!isSignedIn && (
+        <div className="flex flex-col items-start gap-3 rounded-md border border-accent/30 bg-accent/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-ink">
+            Login to save your progress and access it every day.
+          </p>
+          <SignInButton mode="modal" fallbackRedirectUrl="/dashboard">
+            <button className="btn-primary shrink-0 px-4 py-2 text-sm">
+              Continue with Google or LinkedIn
+            </button>
+          </SignInButton>
+        </div>
+      )}
 
       <section className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="card p-4 text-center">

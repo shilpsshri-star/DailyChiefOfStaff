@@ -50,7 +50,7 @@ export default function NavBar() {
               <UserButton afterSignOutUrl="/" />
             </SignedIn>
             <SignedOut>
-              <SignInButton mode="modal">
+              <SignInButton mode="modal" fallbackRedirectUrl={pathname}>
                 <button className="btn-primary px-3 py-1.5 text-sm">
                   Sign in
                 </button>

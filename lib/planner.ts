@@ -55,18 +55,25 @@ export async function breakdownGoalIntoMilestones(
 
 export interface ProposedStep {
   text: string;
+  resource: string;
   output: string;
-  estimatedDays: number;
+  estimatedHours: number;
   dependsOnIndexes: number[]; // indexes into the same proposed-steps array, 0-based
 }
 
 const STEPS_SYSTEM = `You are a sharp, practical Chief of Staff helping someone break a milestone down into concrete steps.
 Given a goal and one milestone of that goal, propose 5 to 7 concrete steps that complete the milestone.
-For each step give: a clear action ("text"), a clear definition of done ("output" — what exists or is true once it's finished),
-an estimated number of days to complete it ("estimatedDays", a positive integer), and any dependencies on other steps in
-this same list by their 0-based index ("dependsOnIndexes", an array of integers, empty if none — only depend on earlier steps).
+
+Every step must be immediately actionable with no further interpretation needed. For each step give:
+
+1. "text" — a concrete action, never vague advice. Name the specific thing to do. Bad: "Assess your current skill level." Good: "Take the free skills assessment at linkedin.com/learning/paths and screenshot your results." If you don't know a real URL, name a specific, real, well-known tool, book, course, or template by name instead of inventing a fake link.
+2. "resource" — the suggested resource or tool for this step (a named site, course, app, template, or person to contact). Empty string only if a step genuinely needs no external resource (e.g. "Write a one-page summary of what you learned").
+3. "output" — the deliverable: what concretely exists or is true once this step is done (a file, a number, a decision, a completed form — not a feeling like "more confident").
+4. "estimatedHours" — estimated time to complete, in HOURS (not days). Use realistic fractional or whole numbers (e.g. 0.5, 1, 2, 4, 8).
+5. "dependsOnIndexes" — an array of 0-based indexes into this same list for any steps that must finish first (empty if none — only depend on earlier steps).
+
 Respond with ONLY valid JSON, no markdown fences, in this exact shape:
-{"steps":[{"text":"...","output":"...","estimatedDays":2,"dependsOnIndexes":[]}]}`;
+{"steps":[{"text":"...","resource":"...","output":"...","estimatedHours":2,"dependsOnIndexes":[]}]}`;
 
 export async function breakdownMilestoneIntoSteps(
   goalText: string,
@@ -80,7 +87,7 @@ export async function breakdownMilestoneIntoSteps(
         content: `My goal: "${goalText}"\nThe milestone to break down: "${milestoneText}"\n\nBreak this milestone into 5-7 concrete steps.`,
       },
     ],
-    maxTokens: 1200,
+    maxTokens: 1600,
   });
 
   try {
@@ -90,10 +97,11 @@ export async function breakdownMilestoneIntoSteps(
         .filter((s): s is Record<string, unknown> => typeof s === "object" && s !== null)
         .map((s) => ({
           text: typeof s.text === "string" ? s.text.trim() : "",
+          resource: typeof s.resource === "string" ? s.resource.trim() : "",
           output: typeof s.output === "string" ? s.output.trim() : "",
-          estimatedDays:
-            typeof s.estimatedDays === "number" && s.estimatedDays > 0
-              ? Math.round(s.estimatedDays)
+          estimatedHours:
+            typeof s.estimatedHours === "number" && s.estimatedHours > 0
+              ? Math.round(s.estimatedHours * 4) / 4 // round to nearest quarter-hour
               : 1,
           dependsOnIndexes: Array.isArray(s.dependsOnIndexes)
             ? s.dependsOnIndexes.filter((n: unknown) => typeof n === "number")
@@ -126,7 +134,9 @@ export interface PickedFocus {
 const FOCUS_SYSTEM = `You are the user's Chief of Staff doing their morning planning.
 You'll be given a list of candidate steps (each tied to a goal and milestone) that are unblocked and ready to work on,
 plus a short recap of recent days. Pick exactly 3 of these candidates (fewer only if fewer than 3 exist) as today's
-top focus items, and explain briefly why each matters right now. You MUST only choose stepId values from the provided list.
+top focus items, and explain briefly why each matters right now. Prefer spreading picks across different goals and
+milestones rather than piling all 3 onto the same one, unless the recap makes a strong case for focusing narrowly.
+You MUST only choose stepId values from the provided list.
 Respond with ONLY valid JSON, no markdown fences, in this exact shape:
 {"picks":[{"stepId":"...","reasoning":"..."}]}`;
 

@@ -1,8 +1,12 @@
 "use client";
 
-// Client-only storage for the anonymous trial: a guest can jot down their
-// goals on the Onboarding page without an account. Once they sign in, we
-// migrate this into their real per-user profile on the server and clear it.
+// DEPRECATED: superseded by lib/guestStore.ts, which generalizes this same
+// idea (anonymous localStorage trial, migrated into Supabase on sign-in)
+// from a flat list of goal texts to the full Profile + DailyLogs +
+// WeeklyReviews guest-mode flow. Nothing in the app imports this file
+// anymore; it's kept only so the legacy "cos:draft:goals" key it used is
+// still understood (guestStore.clearAllGuestData() also clears that key,
+// in case anyone still has it sitting in their browser from before).
 const DRAFT_KEY = "cos:draft:goals";
 
 export function loadDraftGoals(): string[] {

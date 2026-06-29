@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { kvGet, kvSet, KEYS } from "@/lib/kv";
+import { loadProfile, saveProfile, markOnboardedIfNeeded } from "@/lib/db";
 import { requireUserId, unauthorized } from "@/lib/auth";
 import { recordActivity } from "@/lib/stats";
 import { todayKey } from "@/lib/date";
 import { genId } from "@/lib/goals";
-import { EMPTY_META, EMPTY_PROFILE, Goal, Profile, UserMeta } from "@/lib/types";
+import { Goal, Profile } from "@/lib/types";
 
 export async function GET() {
   const userId = await requireUserId();
   if (!userId) return unauthorized();
 
-  const profile = await kvGet<Profile>(KEYS.profile(userId));
-  return NextResponse.json(profile ?? EMPTY_PROFILE);
+  const profile = await loadProfile(userId);
+  return NextResponse.json(profile);
 }
 
 // Onboarding: accepts 1-5 free-text goal strings and stores them permanently.
@@ -24,8 +24,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const rawGoals: unknown[] = Array.isArray(body.goals) ? body.goals : [];
 
-  const existing =
-    (await kvGet<Profile>(KEYS.profile(userId))) ?? EMPTY_PROFILE;
+  const existing = await loadProfile(userId);
   const existingByText = new Map(existing.goals.map((g) => [g.text, g]));
 
   const goals: Goal[] = rawGoals
@@ -51,14 +50,8 @@ export async function POST(req: NextRequest) {
     updatedAt: new Date().toISOString(),
   };
 
-  await kvSet(KEYS.profile(userId), profile);
-
-  const meta = (await kvGet<UserMeta>(KEYS.meta(userId))) ?? { ...EMPTY_META };
-  if (!meta.onboardedAt) {
-    meta.onboardedAt = new Date().toISOString();
-    await kvSet(KEYS.meta(userId), meta);
-  }
-
+  await saveProfile(userId, profile);
+  await markOnboardedIfNeeded(userId);
   await recordActivity(userId, todayKey());
 
   return NextResponse.json(profile);

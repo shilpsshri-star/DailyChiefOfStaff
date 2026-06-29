@@ -1,31 +1,40 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useEffect, useRef, useState } from "react";
+import { useUser, SignInButton } from "@clerk/nextjs";
 import Link from "next/link";
-import { DailyLog, DailyResultStatus, EMPTY_DAILY_LOG, Profile, EMPTY_PROFILE } from "@/lib/types";
-import AuthGate from "@/components/AuthGate";
-
-function todayKeyClient(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
+import {
+  DailyLog,
+  DailyResult,
+  DailyResultStatus,
+  EMPTY_DAILY_LOG,
+  Profile,
+  EMPTY_PROFILE,
+} from "@/lib/types";
+import { todayKey, dateMinusDays } from "@/lib/date";
+import {
+  countCompletedGoals,
+  countCompletedMilestones,
+  getCandidateSteps,
+  recomputeStatuses,
+} from "@/lib/goals";
+import { applyActivity } from "@/lib/statsCore";
+import {
+  ensureGuestMigrated,
+  loadGuestDailyLog,
+  loadGuestProfile,
+  loadGuestStats,
+  saveGuestDailyLog,
+  saveGuestProfile,
+  saveGuestStats,
+} from "@/lib/guestStore";
 
 export default function DailyPage() {
-  const { isLoaded, isSignedIn } = useUser();
+  const { isLoaded } = useUser();
 
   if (!isLoaded) return <p className="text-ink/60">Loading…</p>;
 
-  return (
-    <AuthGate
-      title="Run today's Daily Loop"
-      description="Sign in with Google or LinkedIn to get your 3 focus items each morning and close the loop each evening."
-    >
-      {isSignedIn && <DailyContent />}
-    </AuthGate>
-  );
+  return <DailyContent />;
 }
 
 type Answer = { status: DailyResultStatus; note: string };
@@ -41,24 +50,33 @@ function ActivateGoalCallout({ message }: { message: string }) {
   );
 }
 
+// Mirrors the recap text the signed-in /api/daily/morning route builds from
+// yesterday's log server-side, so the AI sees the same shape of context
+// regardless of auth state.
+function recapFromYesterday(log: DailyLog | null): string {
+  if (!log || log.results.length === 0) return "";
+  const lines = log.results.map((r) => {
+    const item = log.focusItems.find((f) => f.stepId === r.stepId);
+    const label = item ? item.stepText : r.stepId;
+    return `- ${label}: ${r.status}${r.note ? ` (${r.note})` : ""}`;
+  });
+  return `Yesterday's results:\n${lines.join("\n")}${
+    log.adjustmentNote ? `\n\nYesterday's chief-of-staff note: ${log.adjustmentNote}` : ""
+  }`;
+}
+
 function DailyContent() {
-  const [log, setLog] = useState<DailyLog>(EMPTY_DAILY_LOG(todayKeyClient()));
+  const { isSignedIn } = useUser();
+  const [log, setLog] = useState<DailyLog>(EMPTY_DAILY_LOG(todayKey()));
   const [profile, setProfile] = useState<Profile>(EMPTY_PROFILE);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
+  const wasSignedIn = useRef(false);
 
-  async function load() {
-    const [logRes, profileRes] = await Promise.all([
-      fetch("/api/daily/morning"),
-      fetch("/api/goals"),
-    ]);
-    const data: DailyLog = await logRes.json();
-    const profileData: Profile = await profileRes.json();
-    setLog(data);
-    setProfile(profileData);
+  function seedAnswers(data: DailyLog) {
     const seeded: Record<string, Answer> = {};
     for (const item of data.focusItems) {
       const existing = data.results.find((r) => r.stepId === item.stepId);
@@ -67,29 +85,133 @@ function DailyContent() {
         : { status: "done", note: "" };
     }
     setAnswers(seeded);
+  }
+
+  async function load() {
+    if (isSignedIn) {
+      if (!wasSignedIn.current) await ensureGuestMigrated();
+      const [logRes, profileRes] = await Promise.all([
+        fetch("/api/daily/morning"),
+        fetch("/api/goals"),
+      ]);
+      const data: DailyLog = await logRes.json();
+      const profileData: Profile = await profileRes.json();
+      setLog(data);
+      setProfile(profileData);
+      seedAnswers(data);
+    } else {
+      const today = todayKey();
+      const data = loadGuestDailyLog(today) ?? EMPTY_DAILY_LOG(today);
+      const profileData = loadGuestProfile();
+      setLog(data);
+      setProfile(profileData);
+      seedAnswers(data);
+    }
+    wasSignedIn.current = Boolean(isSignedIn);
     setLoading(false);
   }
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSignedIn]);
 
   async function generateFocus() {
     setGenerating(true);
     setError(null);
     try {
-      const res = await fetch("/api/daily/morning", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Something went wrong.");
-        return;
+      if (isSignedIn) {
+        const res = await fetch("/api/daily/morning", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error ?? "Something went wrong.");
+          return;
+        }
+        setLog(data);
+        seedAnswers(data);
+      } else {
+        const today = todayKey();
+        const currentProfile = loadGuestProfile();
+        const candidates = getCandidateSteps(currentProfile);
+        if (candidates.length === 0) {
+          const emptyLog: DailyLog = {
+            ...EMPTY_DAILY_LOG(today),
+            morningGeneratedAt: new Date().toISOString(),
+          };
+          saveGuestDailyLog(emptyLog);
+          setLog(emptyLog);
+          seedAnswers(emptyLog);
+          return;
+        }
+        const yesterday = loadGuestDailyLog(dateMinusDays(today, 1));
+        const recap = recapFromYesterday(yesterday);
+        const res = await fetch("/api/daily/morning", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ candidates, recap }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error ?? "Something went wrong.");
+          return;
+        }
+        const picks: { stepId: string; reasoning: string }[] = data.picks ?? [];
+
+        for (const pick of picks) {
+          const candidate = candidates.find((c) => c.stepId === pick.stepId);
+          if (!candidate) continue;
+          for (const goal of currentProfile.goals) {
+            if (goal.text !== candidate.goalText) continue;
+            for (const milestone of goal.milestones) {
+              const step = milestone.steps.find((s) => s.id === pick.stepId);
+              if (step) step.status = "active";
+            }
+          }
+        }
+        currentProfile.updatedAt = new Date().toISOString();
+        saveGuestProfile(currentProfile);
+        setProfile(currentProfile);
+
+        const focusItems = picks
+          .map((p) => {
+            const c = candidates.find((cc) => cc.stepId === p.stepId);
+            if (!c) return null;
+            let goalId = "";
+            let milestoneId = "";
+            for (const goal of currentProfile.goals) {
+              if (goal.text !== c.goalText) continue;
+              for (const milestone of goal.milestones) {
+                if (milestone.steps.some((s) => s.id === p.stepId)) {
+                  goalId = goal.id;
+                  milestoneId = milestone.id;
+                }
+              }
+            }
+            return {
+              stepId: p.stepId,
+              goalId,
+              milestoneId,
+              goalText: c.goalText,
+              milestoneText: c.milestoneText,
+              stepText: c.stepText,
+              reasoning: p.reasoning,
+            };
+          })
+          .filter((f): f is NonNullable<typeof f> => f !== null);
+
+        const newLog: DailyLog = {
+          date: today,
+          focusItems,
+          results: [],
+          adjustmentNote: "",
+          morningGeneratedAt: new Date().toISOString(),
+          eveningCompletedAt: null,
+        };
+        saveGuestDailyLog(newLog);
+        saveGuestStats(applyActivity(loadGuestStats(), today));
+        setLog(newLog);
+        seedAnswers(newLog);
       }
-      setLog(data);
-      const seeded: Record<string, Answer> = {};
-      for (const item of data.focusItems) {
-        seeded[item.stepId] = { status: "done", note: "" };
-      }
-      setAnswers(seeded);
     } catch {
       setError("Couldn't reach the server. Try again.");
     } finally {
@@ -101,22 +223,77 @@ function DailyContent() {
     setSubmitting(true);
     setError(null);
     try {
-      const results = log.focusItems.map((item) => ({
+      const results: DailyResult[] = log.focusItems.map((item) => ({
         stepId: item.stepId,
         status: answers[item.stepId]?.status ?? "skipped",
         note: answers[item.stepId]?.note ?? "",
       }));
-      const res = await fetch("/api/daily/evening", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ results }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Something went wrong.");
-        return;
+
+      if (isSignedIn) {
+        const res = await fetch("/api/daily/evening", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ results }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error ?? "Something went wrong.");
+          return;
+        }
+        setLog(data.log);
+        setProfile(data.profile);
+      } else {
+        const currentProfile = loadGuestProfile();
+        for (const result of results) {
+          for (const goal of currentProfile.goals) {
+            for (const milestone of goal.milestones) {
+              const step = milestone.steps.find((s) => s.id === result.stepId);
+              if (step) step.status = result.status;
+            }
+          }
+        }
+        recomputeStatuses(currentProfile);
+        currentProfile.updatedAt = new Date().toISOString();
+        saveGuestProfile(currentProfile);
+
+        const recapLines = log.focusItems.map((item) => {
+          const r = results.find((x) => x.stepId === item.stepId);
+          return `- [${item.goalText} / ${item.milestoneText}] ${item.stepText} -> ${
+            r ? r.status : "no response"
+          }${r?.note ? ` (${r.note})` : ""}`;
+        });
+
+        let adjustmentNote = "";
+        if (recapLines.length > 0) {
+          const res = await fetch("/api/daily/evening", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ recapText: recapLines.join("\n") }),
+          });
+          const data = await res.json();
+          adjustmentNote = data.adjustmentNote ?? "";
+        }
+
+        const updatedLog: DailyLog = {
+          ...log,
+          results,
+          adjustmentNote,
+          eveningCompletedAt: new Date().toISOString(),
+        };
+        saveGuestDailyLog(updatedLog);
+
+        const stepsCompletedToday = results.filter((r) => r.status === "done").length;
+        saveGuestStats(
+          applyActivity(loadGuestStats(), log.date, {
+            stepsCompletedToday,
+            totalGoalsCompleted: countCompletedGoals(currentProfile),
+            totalMilestonesCompleted: countCompletedMilestones(currentProfile),
+          })
+        );
+
+        setLog(updatedLog);
+        setProfile(currentProfile);
       }
-      setLog(data.log);
     } catch {
       setError("Couldn't reach the server. Try again.");
     } finally {
@@ -134,6 +311,19 @@ function DailyContent() {
         <h1 className="text-2xl font-semibold">Daily Loop</h1>
         <p className="mt-1 text-ink/70">{log.date}</p>
       </div>
+
+      {!isSignedIn && (
+        <div className="flex flex-col items-start gap-3 rounded-md border border-accent/30 bg-accent/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-ink">
+            Login to save your progress and access it every day.
+          </p>
+          <SignInButton mode="modal" fallbackRedirectUrl="/daily">
+            <button className="btn-primary shrink-0 px-4 py-2 text-sm">
+              Continue with Google or LinkedIn
+            </button>
+          </SignInButton>
+        </div>
+      )}
 
       {error && (
         <div className="card border-red-200 p-4 text-sm text-red-600">{error}</div>
