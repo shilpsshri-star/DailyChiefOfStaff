@@ -75,21 +75,10 @@ Every step must be immediately actionable with no further interpretation needed.
 Respond with ONLY valid JSON, no markdown fences, in this exact shape:
 {"steps":[{"text":"...","resource":"...","output":"...","estimatedHours":2,"dependsOnIndexes":[]}]}`;
 
-export async function breakdownMilestoneIntoSteps(
-  goalText: string,
-  milestoneText: string
-): Promise<ProposedStep[]> {
-  const raw = await askClaude({
-    system: STEPS_SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content: `My goal: "${goalText}"\nThe milestone to break down: "${milestoneText}"\n\nBreak this milestone into 5-7 concrete steps.`,
-      },
-    ],
-    maxTokens: 1600,
-  });
-
+// Shared parsing for both the drafter's and the critic's responses -- same
+// JSON shape, same cleanup rules (trim strings, round hours to the nearest
+// quarter, drop non-numeric dependency indexes).
+function parseStepsJson(raw: string): ProposedStep[] {
   try {
     const json = extractJson(raw) as { steps?: unknown };
     if (Array.isArray(json.steps)) {
@@ -114,6 +103,96 @@ export async function breakdownMilestoneIntoSteps(
     // fall through
   }
   return [];
+}
+
+// Drafter: the original single prompt, proposing 5-7 steps from scratch.
+async function draftMilestoneSteps(
+  goalText: string,
+  milestoneText: string
+): Promise<ProposedStep[]> {
+  const raw = await askClaude({
+    system: STEPS_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content: `My goal: "${goalText}"\nThe milestone to break down: "${milestoneText}"\n\nBreak this milestone into 5-7 concrete steps.`,
+      },
+    ],
+    maxTokens: 1600,
+  });
+  return parseStepsJson(raw);
+}
+
+// ---------- Critic agent ----------
+//
+// A second, independent model call that reviews the drafter's output
+// against this app's house rules before it ever reaches the user --
+// catching anything the drafter's own prompt missed (e.g. it still suggests
+// an external tracker, or a vague output) rather than relying on prompt
+// wording alone to hold every time. This is the multi-agent piece: drafter
+// proposes, critic checks and corrects, the pipeline returns the critic's
+// version. dependsOnIndexes is always taken from the draft, never the
+// critic's output, so the dependency graph can't be silently corrupted by
+// a model mistake in the review pass.
+
+const CRITIC_SYSTEM = `You are a strict editor reviewing a draft list of milestone steps against this app's house rules before they reach the user. You'll be given the goal, the milestone, and a JSON draft of steps.
+
+Fix any of these violations IN PLACE, rewriting only the field(s) that are wrong on a given step -- leave everything else on that step, and every step with no violations, completely untouched:
+- "text", "resource", or "output" that tells the user to set up tracking, planning, or note-taking in an external app (Notion, Google Sheets, Trello, Asana, a spreadsheet, a board, a separate doc). Rewrite "resource" to a real read-only reference (or "") and "output" to point at a concrete deliverable or this app's own notes field instead.
+- "text" that's vague advice rather than one concrete, immediately actionable instruction.
+- "output" that's vague ("make progress," "get better," "understand X") instead of a concrete deliverable.
+- "estimatedHours" that's clearly unrealistic for the action described.
+
+Don't add or remove steps, don't reorder them, don't touch "dependsOnIndexes" -- it's ignored either way.
+
+Respond with ONLY valid JSON, no markdown fences, in the exact same shape you were given:
+{"steps":[{"text":"...","resource":"...","output":"...","estimatedHours":2,"dependsOnIndexes":[]}]}`;
+
+async function criticizeSteps(
+  goalText: string,
+  milestoneText: string,
+  draft: ProposedStep[]
+): Promise<ProposedStep[]> {
+  if (draft.length === 0) return draft;
+
+  const raw = await askClaude({
+    system: CRITIC_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content: `Goal: "${goalText}"\nMilestone: "${milestoneText}"\n\nDraft steps:\n${JSON.stringify(
+          { steps: draft },
+          null,
+          2
+        )}\n\nReturn the corrected list.`,
+      },
+    ],
+    maxTokens: 1600,
+  });
+
+  const revised = parseStepsJson(raw);
+  // Only trust the critic's pass if it returned the same number of steps --
+  // a mismatch almost always means a parsing/formatting slip, not a
+  // deliberate edit, and silently dropping/adding steps here would be worse
+  // than just keeping the draft. Dependencies always come from the draft.
+  if (revised.length !== draft.length) return draft;
+  return revised.map((s, i) => ({ ...s, dependsOnIndexes: draft[i].dependsOnIndexes }));
+}
+
+export async function breakdownMilestoneIntoSteps(
+  goalText: string,
+  milestoneText: string
+): Promise<ProposedStep[]> {
+  const draft = await draftMilestoneSteps(goalText, milestoneText);
+  if (draft.length === 0) return draft;
+  try {
+    return await criticizeSteps(goalText, milestoneText, draft);
+  } catch {
+    // If the critic call itself fails (rate limit, network, etc.), the
+    // drafter's output is still a perfectly usable plan -- never let the
+    // review pass be a single point of failure for step generation.
+    return draft;
+  }
 }
 
 // ---------- Daily focus picking ----------

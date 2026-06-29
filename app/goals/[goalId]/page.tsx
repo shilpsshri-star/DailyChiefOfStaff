@@ -204,6 +204,40 @@ function GoalDetailContent() {
     }
   }
 
+  // Deletes a milestone (and every step under it) entirely -- there's no
+  // "removed" status, this literally removes it from the goal's milestone
+  // list and re-numbers the rest by position. Clamps activeMilestoneIndex
+  // afterward so the carousel doesn't point past the end of the shrunk list.
+  async function deleteMilestone(milestoneId: string) {
+    if (!window.confirm("Delete this milestone and all its steps? This can't be undone.")) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      if (isSignedIn) {
+        const res = await fetch(`/api/goals/${goalId}/milestones/${milestoneId}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          setError("Couldn't delete the milestone. Try again.");
+          return;
+        }
+        await load();
+      } else {
+        const remaining = goal!.milestones
+          .filter((m) => m.id !== milestoneId)
+          .map((m, i) => ({ ...m, order: i }));
+        applyGuestGoalUpdate({ ...goal!, milestones: remaining });
+      }
+      setActiveMilestoneIndex((idx) => Math.max(idx - 1, 0));
+    } catch {
+      setError("Couldn't reach the server. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Days remaining until a milestone's target date, or null if no date is
   // set. Negative means overdue.
   function daysUntil(dateStr: string): number {
@@ -606,6 +640,14 @@ function GoalDetailContent() {
                         ? "done"
                         : `${m.steps.filter((s) => s.status === "done").length}/${m.steps.length} steps`}
                     </span>
+                    <button
+                      className="shrink-0 text-xs text-ink/40 hover:text-red-600"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => deleteMilestone(m.id)}
+                    >
+                      Delete
+                    </button>
                   </div>
 
                   <div className="mt-2 flex items-center gap-2 text-xs text-ink/60">
@@ -737,6 +779,18 @@ function GoalDetailContent() {
                                   )
                                 }
                               />
+                              <button
+                                className="shrink-0 rounded-md px-2 py-1 text-xs text-ink/40 hover:bg-red-50 hover:text-red-600"
+                                type="button"
+                                title="Remove this step"
+                                onClick={() =>
+                                  setDraftSteps((prev) =>
+                                    prev ? prev.filter((_, idx) => idx !== si) : prev
+                                  )
+                                }
+                              >
+                                Remove
+                              </button>
                             </div>
                             <div className="mt-2 grid grid-cols-[1fr,1fr] gap-2 pl-8">
                               <input

@@ -112,6 +112,45 @@ A `users` row is created automatically the first time a signed-in user hits any 
 
 ---
 
+## MCP server: talk to your plan from Claude Desktop
+
+`mcp-server/index.ts` is a small standalone [MCP](https://modelcontextprotocol.io) server that exposes your own goals/milestones/steps as tools — so you can ask Claude Desktop things like "what's my focus today", "mark step X done", or "push milestone Y's date back a week" without opening the web app. It reuses the exact same `lib/db.ts`, `lib/goals.ts`, and `lib/planner.ts` the web app uses, just over MCP instead of HTTP.
+
+This is a **personal, single-user tool**, not a multi-tenant API — every call is scoped to one Clerk user id you set yourself. Don't share this server or its config with anyone else; it talks straight to Supabase with the service role key.
+
+**Tools it exposes:**
+- `list_goals` — every goal, with milestone status/progress/target dates.
+- `get_daily_focus` — the AI's top 3 recommended steps right now (same picker the Daily Loop uses).
+- `list_milestone_steps` — every step under a milestone, with status/resource/output/notes.
+- `set_step_status` — mark a step pending/active/done/blocked/skipped (rolls up milestone/goal completion).
+- `set_milestone_target_date` — set or clear a milestone's target date. If `GOOGLE_CALENDAR_ACCESS_TOKEN` is set (see below), this also creates an all-day event on your Google Calendar for the new date — this server acting as an MCP *client*, calling out to Google's own Calendar MCP server.
+
+**Setup:**
+1. `npm install` (adds `@modelcontextprotocol/sdk`, `zod`, and `tsx` alongside the existing dependencies). Needs Node 20.6+ (for `--env-file`, which `npm run mcp` uses to load `.env.local` the same way Next.js does) — `node -v` to check, upgrade if you're on an older Node.
+2. In `.env.local`, set `MCP_USER_ID` to your own Clerk user id — open Supabase → Table editor → `users`, copy the `id` column for your row — plus the same `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` / `ANTHROPIC_API_KEY` the web app already uses. `GOOGLE_CALENDAR_ACCESS_TOKEN` is optional, only needed for the calendar sync described above.
+3. Test it runs: `npm run mcp` (it should print "Daily Chief of Staff MCP server running on stdio." to stderr and then sit waiting for input — Ctrl+C to stop).
+4. Add it to Claude Desktop: **Settings → Developer → Edit Config**, add an entry under `mcpServers`:
+   ```json
+   {
+     "mcpServers": {
+       "daily-chief-of-staff": {
+         "command": "npx",
+         "args": ["tsx", "/absolute/path/to/daily-chief-of-staff/mcp-server/index.ts"],
+         "env": {
+           "MCP_USER_ID": "user_...",
+           "NEXT_PUBLIC_SUPABASE_URL": "https://...supabase.co",
+           "SUPABASE_SERVICE_ROLE_KEY": "...",
+           "ANTHROPIC_API_KEY": "sk-ant-...",
+           "GOOGLE_CALENDAR_ACCESS_TOKEN": "optional, see above"
+         }
+       }
+     }
+   }
+   ```
+   Restart Claude Desktop, then start a new chat and ask it about your goals — it'll call these tools directly.
+
+---
+
 ## Project structure
 
 - `lib/types.ts` — the Goal → Milestone → Step data model, plus `DailyLog`, `WeeklyReview`, `UserStats`, and `Badge`.
@@ -125,6 +164,8 @@ A `users` row is created automatically the first time a signed-in user hits any 
 - `lib/stats.ts` — streak, badge, and completion-stat engine, backed by the `stats` jsonb column on the `users` table.
 - `app/onboarding`, `app/goals`, `app/daily`, `app/weekly`, `app/dashboard` — the five pages described above.
 - `app/api/...` — the corresponding API routes for goals/milestones/steps, the daily loop, the weekly review, and stats.
+- `mcp-server/index.ts` — standalone MCP server exposing your goals/milestones/steps as tools for Claude Desktop (or any MCP client). See "MCP server" above.
+- `mcp-server/calendar-client.ts` — the MCP *client* half: connects out to Google's hosted Calendar MCP server to create an event when a milestone's target date is set. Optional, best-effort, skipped entirely if `GOOGLE_CALENDAR_ACCESS_TOKEN` isn't set.
 
 The old Morning Briefing, Chat, and End of Day pages/routes have been retired in favor of the Goal Activation and Daily Loop flow above; they now redirect or return `410 Gone`.
 
