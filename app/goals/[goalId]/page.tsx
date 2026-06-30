@@ -68,6 +68,28 @@ function GoalDetailContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSignedIn]);
 
+  // Bug fix: if this goal's milestones were generated but never confirmed
+  // (every one is still status "proposed"), the "confirm your milestones"
+  // UI normally comes from the ephemeral draftMilestones state set right
+  // after generateMilestones() runs -- but that state doesn't survive a
+  // page reload or a fresh visit. Without this, a goal stuck at "proposed"
+  // renders nothing at all: not the "break into milestones" card (milestones
+  // isn't empty), not the confirm-milestones card (draftMilestones is null),
+  // not the steps card (no confirmed milestones yet) -- a blank page below
+  // the title. Reconstruct draftMilestones from the persisted proposed
+  // milestones so the confirm UI reappears.
+  useEffect(() => {
+    if (draftMilestones !== null) return;
+    const g = profile.goals.find((g) => g.id === goalId);
+    if (!g) return;
+    const proposed = g.milestones.filter((m) => m.status === "proposed");
+    const confirmedOrDone = g.milestones.filter((m) => m.status !== "proposed");
+    if (proposed.length > 0 && confirmedOrDone.length === 0) {
+      setDraftMilestones(proposed.map((m) => ({ id: m.id, text: m.text })));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile, goalId]);
+
   const goal = profile.goals.find((g) => g.id === goalId);
 
   if (loading) return <p className="text-ink/60">Loading…</p>;

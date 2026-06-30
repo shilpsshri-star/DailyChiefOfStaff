@@ -65,6 +65,21 @@ You do **not** need to upload a `node_modules` folder — Vercel installs depend
 
 That's it — no extra code changes needed. Google/LinkedIn-only is a Clerk Dashboard setting, not something hardcoded in the app.
 
+### Switch to a Clerk Production instance (fixes the "development keys" warning)
+
+Every Clerk application has two separate instances — **Development** and **Production** — each with its own keys (`pk_test_…`/`sk_test_…` vs `pk_live_…`/`sk_live_…`) and its own Google/LinkedIn OAuth setup. If your live site's browser console shows `Clerk has been loaded with development keys`, it means the Vercel env vars are still pointing at the dev instance's `pk_test_`/`sk_test_` keys. Development instances have strict rate limits and aren't meant for real users, so this needs to be fixed before sharing the site.
+
+1. In the Clerk Dashboard, open your app and switch to the **Production** instance using the environment switcher near the top of the left sidebar (it defaults to Development).
+2. Go to **Domains** and add your real production domain (`stostr.com`, and `www.stostr.com` if you use that too).
+3. Go to **User & Authentication → Social Connections** in the Production instance and turn Google and LinkedIn back **ON** (this is a separate toggle from Development — it does not carry over). For a production instance, Clerk requires you to supply your **own** OAuth credentials instead of using its shared dev ones:
+   - **Google**: create an OAuth Client ID in [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (type "Web application"), add the **Authorized redirect URI** Clerk shows you on that Social Connections screen, then paste the **Client ID** and **Client Secret** into Clerk.
+   - **LinkedIn**: same idea, via the [LinkedIn Developer Portal](https://www.linkedin.com/developers/apps) — create an app, request the "Sign In with LinkedIn" product, add Clerk's redirect URI, then paste the Client ID/Secret into Clerk.
+4. Go to **API Keys** in the Production instance and copy the **Publishable key** (`pk_live_…`) and **Secret key** (`sk_live_…`).
+5. In Vercel, go to **Settings → Environment Variables**, edit `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` to the new `pk_live_`/`sk_live_` values (make sure they're set for the **Production** environment), then go to **Deployments** and **Redeploy**.
+6. Reload the live site and check the browser console — the development-keys warning should be gone, and Google/LinkedIn sign-in should still work end to end.
+
+Keep the Development instance around for local testing (`npm run dev`) — just make sure your local `.env.local` keeps the `pk_test_`/`sk_test_` keys while Vercel's production env vars use the `pk_live_`/`sk_live_` ones.
+
 ### Set up the Clerk webhook (recommended, not required)
 
 Every authenticated API route already creates a user's Supabase row on its own (via `requireUserId()` in `lib/auth.ts`), so the app works without this step. Setting up the webhook just means the row gets the user's **email** attached immediately at sign-up, instead of only an id.
